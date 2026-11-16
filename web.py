@@ -1,15 +1,25 @@
 import html
 import secrets
 import sqlite3
+from http.cookies import CookieError, SimpleCookie
+from threading import Lock
+from time import monotonic
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from operaciones import registrar_entrada, registrar_salida
+from cuentas import autenticar, buscar_cuenta, cambiar_acceso_operario, crear_cuenta
+from operaciones import (
+    actualizar_vehiculo, cambiar_estado_celda, guardar_cliente,
+    registrar_cliente_vehiculo, registrar_entrada, registrar_salida,
+)
 
 CARPETA = Path(__file__).resolve().parent
 TOKEN = secrets.token_hex(24)
+SESIONES = {}
+BLOQUEO_SESIONES = Lock()
+VIGENCIA_SESION = 8 * 60 * 60
 
 
 def conectar():
@@ -59,22 +69,9 @@ def campo(nombre, etiqueta, obligatorio=True):
 
 
 def formulario(accion, contenido, boton):
-    with conectar() as conexion:
-        operarios = conexion.execute(
-            "SELECT usuario, nombre FROM operario ORDER BY usuario"
-        ).fetchall()
-
-    opciones = "".join(
-        f'<option value="{escapar(o["usuario"])}">'
-        f'{escapar(o["nombre"])} ({escapar(o["usuario"])})'
-        "</option>"
-        for o in operarios
-    )
     return (
         f'<form method="post" action="/{accion}">'
         f'<input type="hidden" name="token" value="{TOKEN}">'
-        "<label>Operario"
-        f'<select name="operario">{opciones}</select></label>'
         + contenido
         + f"<button>{boton}</button></form>"
     )
@@ -113,12 +110,15 @@ def corregir_celda(placa, codigo, motivo, usuario):
             raise ValueError("El vehículo no está dentro.")
 
         nueva = conexion.execute(
-            "SELECT * FROM celda WHERE codigo = ?",
+            "SELECT * FROM disponibilidad_celda WHERE codigo = ?",
             (codigo,)
         ).fetchone()
 
         if not nueva:
             raise ValueError("La celda no existe.")
+
+        if not nueva["habilitada"]:
+            raise ValueError("La celda de destino está fuera de servicio.")
 
         if nueva["id_celda"] == estancia["id_celda"]:
             raise ValueError("El vehículo ya tiene esa celda.")
@@ -166,7 +166,120 @@ def corregir_celda(placa, codigo, motivo, usuario):
     return f"Celda corregida: {placa} tiene asignada {codigo}."
 
 
+def formulario_ingreso():
+    return (
+        "<h1>Iniciar sesión</h1>"
+        + formulario(
+            "login", campo("usuario", "Usuario")
+            + '<label>Contraseña<input type="password" name="clave" required '
+              'autocomplete="current-password" maxlength="250"></label>',
+            "Ingresar"
+        )
+    )
+
+
 def contenido_pagina(ruta):
+    if ruta == "/clientes":
+        with conectar() as conexion:
+            clientes = conexion.execute(
+                """
+                SELECT p.documento, p.nombre, CASE p.activo WHEN 1 THEN 'Activo' ELSE 'Inactivo' END,
+                       v.placa, v.marca, v.modelo, v.color,
+                       CASE v.activo WHEN 1 THEN 'Activo' WHEN 0 THEN 'Inactivo' END
+                FROM persona p LEFT JOIN vehiculo v USING (id_persona)
+                ORDER BY p.nombre, v.placa
+                """
+            ).fetchall()
+        estado = (
+            '<option value="actualizar">Actualizar datos</option>'
+            '<option value="desactivar">Desactivar</option>'
+            '<option value="activar">Reactivar</option>'
+        )
+        return (
+            "<h1>Registrar cliente y vehículo</h1>"
+            + formulario(
+                "clientes",
+                campo("documento", "Documento") + campo("nombre", "Nombre completo")
+                + campo("placa", "Placa")
+                + '<label>Tipo<select name="tipo"><option>Moto</option>'
+                  '<option value="Automovil">Automóvil</option>'
+                  '<option>Camioneta</option></select></label>'
+                + campo("marca", "Marca") + campo("modelo", "Modelo") + campo("color", "Color"),
+                "Guardar cliente y vehículo"
+            )
+            + "<h2>Gestionar cliente</h2>"
+            + formulario(
+                "guardar-cliente", campo("documento", "Documento")
+                + campo("nombre", "Nombre completo (para registrar o actualizar)", False)
+                + '<label>Acción<select name="modo"><option value="registrar">Registrar cliente</option>'
+                + estado + '</select></label>', "Aplicar al cliente"
+            )
+            + "<h2>Gestionar vehículo</h2>"
+            + formulario(
+                "actualizar-vehiculo", campo("placa", "Placa")
+                + campo("marca", "Marca", False) + campo("modelo", "Modelo", False)
+                + campo("color", "Color", False)
+                + '<label>Acción<select name="modo">' + estado + '</select></label>',
+                "Aplicar al vehículo"
+            )
+            + "<h2>Clientes y vehículos registrados</h2>"
+            + tabla(
+                ["Documento", "Cliente", "Estado cliente", "Placa", "Marca", "Modelo",
+                 "Color", "Estado vehículo"], clientes
+            )
+        )
+    if ruta == "/cuentas":
+        with conectar() as conexion:
+            filas = conexion.execute(
+                """
+                SELECT o.usuario, o.nombre,
+                       CASE WHEN c.activa = 1 THEN 'Activa' ELSE 'Inactiva' END
+                FROM cuenta c JOIN operario o USING (id_operario)
+                WHERE c.rol = 'Operario' ORDER BY o.usuario
+                """
+            ).fetchall()
+        return (
+            "<h1>Cuentas de operarios</h1>"
+            + formulario(
+                "cuentas", campo("usuario", "Usuario") + campo("nombre", "Nombre")
+                + '<label>Contraseña inicial<input type="password" name="clave" '
+                  'required minlength="8" maxlength="250"></label>',
+                "Crear operario"
+            )
+            + tabla(["Usuario", "Nombre", "Estado"], filas)
+            + formulario(
+                "acceso-operario", campo("usuario", "Usuario")
+                + '<label>Acceso<select name="activa"><option value="0">Desactivar</option>'
+                  '<option value="1">Reactivar</option></select></label>',
+                "Actualizar acceso"
+            )
+        )
+
+    if ruta == "/celdas":
+        with conectar() as conexion:
+            historial = conexion.execute(
+                """
+                SELECT c.codigo,
+                       CASE WHEN ec.habilitada = 1 THEN 'Habilitada'
+                            ELSE 'Fuera de servicio' END,
+                       ec.motivo, o.nombre, ec.fecha_hora
+                FROM estado_celda ec
+                JOIN celda c ON c.id_celda = ec.id_celda
+                JOIN operario o ON o.id_operario = ec.id_operario
+                ORDER BY ec.id_estado_celda DESC
+                """
+            ).fetchall()
+        campos = campo("celda", "Código de celda") + campo("motivo", "Motivo")
+        return (
+            "<h1>Gestionar celdas</h1>"
+            "<h2>Poner celda fuera de servicio</h2>"
+            + formulario("deshabilitar-celda", campos, "Poner fuera de servicio")
+            + "<h2>Habilitar celda</h2>"
+            + formulario("habilitar-celda", campos, "Habilitar")
+            + "<h2>Historial de cambios de estado</h2>"
+            + tabla(["Celda", "Estado", "Motivo", "Operario", "Fecha"], historial)
+        )
+
     if ruta == "/entrada":
         return (
             "<h1>Registrar entrada</h1>"
@@ -256,10 +369,11 @@ def contenido_pagina(ruta):
         celdas = conexion.execute(
             """
             SELECT c.codigo, c.tipo,
-                   CASE WHEN e.id_estancia IS NULL
-                        THEN 'Disponible' ELSE 'Ocupada' END AS estado,
+                   CASE WHEN c.habilitada = 0 THEN 'Fuera de servicio'
+                        WHEN e.id_estancia IS NULL THEN 'Disponible'
+                        ELSE 'Ocupada' END AS estado,
                    v.placa, e.fecha_hora_entrada
-            FROM celda c
+            FROM disponibilidad_celda c
             LEFT JOIN estancia e
                 ON e.id_celda = c.id_celda
                 AND e.fecha_hora_salida IS NULL
@@ -278,7 +392,9 @@ def contenido_pagina(ruta):
         for titulo, valor in [
             ("Vehículos registrados", registrados),
             ("Vehículos dentro", dentro),
-            ("Celdas disponibles", len(celdas) - dentro),
+            ("Celdas disponibles", sum(c["estado"] == "Disponible" for c in celdas)),
+            ("Fuera de servicio", sum(c["estado"] == "Fuera de servicio" for c in celdas)),
+            ("Capacidad operativa", sum(c["estado"] != "Fuera de servicio" for c in celdas)),
             ("Capacidad total", len(celdas))
         ]
     )
@@ -290,9 +406,12 @@ def contenido_pagina(ruta):
     ]:
         grupo = [c for c in celdas if c["tipo"] == tipo]
         ocupadas = sum(c["estado"] == "Ocupada" for c in grupo)
+        disponibles = sum(c["estado"] == "Disponible" for c in grupo)
+        fuera = len(grupo) - ocupadas - disponibles
         resumen += (
-            f"<p><b>{nombre}:</b> {ocupadas} ocupadas y "
-            f"{len(grupo) - ocupadas} disponibles de {len(grupo)}.</p>"
+            f"<p><b>{nombre}:</b> {ocupadas} ocupadas, {disponibles} disponibles y "
+            f"{fuera} fuera de servicio de {len(grupo)}. "
+            f"Capacidad operativa: {len(grupo) - fuera}.</p>"
         )
 
     return (
@@ -346,7 +465,7 @@ def consultar_vehiculo(placa):
     )
 
 
-def pagina(contenido):
+def pagina(contenido, cuenta=None):
     return """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -415,19 +534,52 @@ button, .boton {
 </head>
 <body>
 <aside>
-<h2>Autos Colombia</h2>
-<a href="/">Ocupación</a>
-<a href="/entrada">Registrar entrada</a>
-<a href="/salida">Registrar salida</a>
-<a href="/corregir">Corregir celda</a>
-<a href="/historial">Historial</a>
-</aside>
+<h2>Autos Colombia</h2>""" + (
+    (
+        f'<p>{escapar(cuenta["nombre"])}<br>{escapar(cuenta["rol"])}</p>'
+        '<a href="/">Ocupación</a><a href="/entrada">Registrar entrada</a>'
+        '<a href="/salida">Registrar salida</a><a href="/corregir">Corregir celda</a>'
+        '<a href="/historial">Historial</a><a href="/clientes">Clientes y vehículos</a>'
+        + ('<a href="/celdas">Gestionar celdas</a><a href="/cuentas">Cuentas de operarios</a>'
+           if cuenta["rol"] == "Administrador" else "")
+        + formulario("logout", "", "Cerrar sesión")
+    ) if cuenta else ""
+) + """</aside>
 <main>""" + contenido + "</main></body></html>"
 
 
 class Servidor(BaseHTTPRequestHandler):
+    cuenta = None
+
+    def id_sesion(self):
+        cookies = SimpleCookie()
+        try:
+            cookies.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            return ""
+        sesion = cookies.get("autos_sesion")
+        return sesion.value if sesion else ""
+
+    def cargar_cuenta(self):
+        with BLOQUEO_SESIONES:
+            sesion = SESIONES.get(self.id_sesion())
+        if sesion and sesion[1] > monotonic():
+            self.cuenta = buscar_cuenta(sesion[0])
+        else:
+            self.cuenta = None
+        return self.cuenta
+
+    def redirigir(self, destino, cookie=None):
+        self.send_response(303)
+        self.send_header("Location", destino)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.end_headers()
+
     def responder(self, contenido, estado=200):
-        datos = pagina(contenido).encode("utf-8")
+        datos = pagina(contenido, self.cuenta).encode("utf-8")
         self.send_response(estado)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(datos)))
@@ -442,12 +594,21 @@ class Servidor(BaseHTTPRequestHandler):
             return
 
         try:
+            if url.path == "/login":
+                self.responder(formulario_ingreso())
+                return
+            if not self.cargar_cuenta():
+                self.redirigir("/login")
+                return
+            if url.path in ("/celdas", "/cuentas") and self.cuenta["rol"] != "Administrador":
+                self.responder("<h1>Acceso restringido</h1>", 403)
+                return
             if url.path == "/consultar":
                 parametros = parse_qs(url.query)
                 placa = parametros.get("placa", [""])[0]
                 contenido = consultar_vehiculo(placa)
             elif url.path in [
-                "/", "/entrada", "/salida", "/corregir", "/historial"
+                "/", "/entrada", "/salida", "/corregir", "/historial", "/celdas", "/clientes", "/cuentas"
             ]:
                 contenido = contenido_pagina(url.path)
             else:
@@ -479,14 +640,71 @@ class Servidor(BaseHTTPRequestHandler):
             def valor(nombre):
                 return datos.get(nombre, [""])[0]
 
-            if not secrets.compare_digest(valor("token"), TOKEN):
+            if not secrets.compare_digest(valor("token").encode("utf-8"), TOKEN.encode("ascii")):
                 raise ValueError("Recarga la página e intenta nuevamente.")
 
             ruta = urlparse(self.path).path
 
-            if ruta == "/entrada":
+            if ruta == "/login":
+                usuario = autenticar(valor("usuario"), valor("clave"))
+                sesion = secrets.token_urlsafe(32)
+                ahora = monotonic()
+                with BLOQUEO_SESIONES:
+                    for id_sesion, (_, vence) in list(SESIONES.items()):
+                        if vence <= ahora:
+                            del SESIONES[id_sesion]
+                    SESIONES.pop(self.id_sesion(), None)
+                    SESIONES[sesion] = (usuario, ahora + VIGENCIA_SESION)
+                self.redirigir("/", f"autos_sesion={sesion}; Path=/; HttpOnly; SameSite=Strict")
+                return
+
+            if not self.cargar_cuenta():
+                self.redirigir("/login")
+                return
+
+            if ruta == "/logout":
+                with BLOQUEO_SESIONES:
+                    SESIONES.pop(self.id_sesion(), None)
+                self.redirigir("/login", "autos_sesion=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
+                return
+
+            if ruta in ("/cuentas", "/acceso-operario", "/habilitar-celda", "/deshabilitar-celda"):
+                if self.cuenta["rol"] != "Administrador":
+                    self.responder("<h1>Acceso restringido</h1>", 403)
+                    return
+
+            if ruta == "/clientes":
+                placa = registrar_cliente_vehiculo(
+                    valor("documento"), valor("nombre"), valor("placa"), valor("tipo"),
+                    valor("marca"), valor("modelo"), valor("color")
+                )
+                contenido = f"<h1>Vehículo {escapar(placa)} registrado</h1>"
+            elif ruta == "/guardar-cliente":
+                guardar_cliente(valor("documento"), valor("nombre"), valor("modo"))
+                self.redirigir("/clientes")
+                return
+            elif ruta == "/actualizar-vehiculo":
+                actualizar_vehiculo(
+                    valor("placa"), valor("marca"), valor("modelo"), valor("color"), valor("modo")
+                )
+                self.redirigir("/clientes")
+                return
+            elif ruta == "/cuentas":
+                crear_cuenta(valor("usuario"), valor("nombre"), valor("clave"))
+                self.redirigir("/cuentas")
+                return
+            elif ruta == "/acceso-operario":
+                usuario = valor("usuario").strip().lower()
+                cambiar_acceso_operario(usuario, valor("activa") == "1")
+                with BLOQUEO_SESIONES:
+                    for id_sesion, (titular, _) in list(SESIONES.items()):
+                        if titular == usuario:
+                            del SESIONES[id_sesion]
+                self.redirigir("/cuentas")
+                return
+            elif ruta == "/entrada":
                 resultado = registrar_entrada(
-                    valor("placa"), valor("operario")
+                    valor("placa"), self.cuenta["usuario"]
                 )
                 contenido = (
                     "<h1>Comprobante de ingreso</h1>"
@@ -513,7 +731,7 @@ class Servidor(BaseHTTPRequestHandler):
                 resultado = registrar_salida(
                     valor("placa"),
                     valor("comprobante"),
-                    valor("operario")
+                    self.cuenta["usuario"]
                 )
                 contenido = (
                     "<h1>Salida registrada</h1>"
@@ -525,10 +743,20 @@ class Servidor(BaseHTTPRequestHandler):
                     "</div>"
                 )
 
+            elif ruta in ("/habilitar-celda", "/deshabilitar-celda"):
+                cambiar_estado_celda(
+                    valor("celda"), ruta == "/habilitar-celda",
+                    valor("motivo"), self.cuenta["usuario"]
+                )
+                contenido = (
+                    "<h1>Estado de celda actualizado</h1>"
+                    '<p><a class="boton" href="/celdas">Ver historial de celdas</a></p>'
+                )
+
             elif ruta == "/corregir":
                 mensaje = corregir_celda(
                     valor("placa"), valor("celda"),
-                    valor("motivo"), valor("operario")
+                    valor("motivo"), self.cuenta["usuario"]
                 )
                 contenido = (
                     "<h1>Cambio registrado</h1>"

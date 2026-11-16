@@ -1,110 +1,47 @@
-# Autos Colombia — Iteración 1
+# Autos Colombia — Iteración 2
 
-Aplicación académica para gestionar entradas y salidas de un
-parqueadero que trabaja unicamente por mensualidades.
+Aplicación académica de un parqueadero por mensualidades. Autora: Yuliet Hernández.
 
-Autora: Yuliet Hernández.
+## Ejecutar en Windows
 
-## Funcionalidades
-
-- Consultar vehículos registrados y sus características.
-- Validar la vigencia de la mensualidad por vehículo.
-- Registrar entradas y asignar una celda disponible y compatible.
-- Generar e imprimir comprobantes de ingreso.
-- Registrar salidas mediante placa y comprobante.
-- Liberar la celda al registrar la salida.
-- Corregir la celda asignada y guardar el motivo y el operario.
-- Consultar ocupación, disponibilidad e historial.
-- Impedir dos estancias abiertas para un vehículo o una celda.
-
-Capacidad: 80 celdas, distribuidas en 10 para motos (M01–M10)
-y 70 para automóviles y camionetas (E01–E70).
-
-## Requisitos
-
-- Python 3.14, versión utilizada durante las pruebas.
-- Un navegador web.
-- No requiere instalar paquetes externos: utiliza la biblioteca
-  estándar de Python y SQLite.
-
-## Ejecución en Windows
-
-Descargar el repositorio, descomprimirlo y abrir una terminal
-dentro de la carpeta del proyecto.
-
-Ejecutar estos comandos en orden:
+Descomprime el proyecto y abre una terminal en la carpeta. Requiere Python y un navegador.
 
 ```powershell
 py app.py
 py datos_prueba.py
+py cuentas.py
 py web.py
 ```
 
-Abrir en el navegador:
+- `app.py` prepara SQLite y agrega los cambios de EA2 a la base de EA1.
+- `datos_prueba.py` carga tres vehículos ficticios. Es opcional en una base con datos.
+- `cuentas.py` crea la cuenta administradora. Ingresa tu propio usuario, nombre y una contraseña de al menos ocho caracteres. Ejecuta este paso una vez por cuenta.
+- Abre http://127.0.0.1:8000. Detén el servidor con Ctrl+C. En otros sistemas puedes usar `python3` en lugar de `py`.
 
-http://127.0.0.1:8000
+## Roles y demostración
 
-Mantener la terminal abierta mientras se utiliza la aplicación.
-Para detener el servidor, presionar Ctrl + C.
+- Administrador y operario pueden consultar la ocupación, gestionar clientes y vehículos, registrar entradas y salidas, corregir celdas y consultar movimientos.
+- El administrador puede crear, desactivar y reactivar cuentas de operarios, cambiar el estado de celdas libres y consultar la bitácora de celdas.
+- Para probar como operario, crea una cuenta desde **Cuentas de operarios**, cierra sesión e ingresa con esa cuenta.
+- Un cliente puede tener varios vehículos. El documento identifica al cliente y la placa identifica al vehículo.
+- Un cliente o un vehículo inactivo impide nuevos ingresos. Una estancia activa se puede cerrar mediante el comprobante.
+- Hay 80 celdas físicas, 10 para motos y 70 para automóviles y camionetas. La capacidad operativa excluye las celdas fuera de servicio.
+- La mensualidad se valida al ingreso. La gestión de cobros y pagos está fuera del alcance de esta iteración.
 
-En sistemas sin el comando `py`, utilizar `python` o `python3`.
+| Placa de prueba | Tipo | Mensualidad al cargar datos en una base nueva |
+| --- | --- | --- |
+| ABC123 | Automóvil | Vigente |
+| ABC12D | Moto | Vigente |
+| XYZ789 | Camioneta | Vencida |
 
-## Datos de demostración
+Los vehículos nuevos se registran sin mensualidad precargada. Usa los datos de demostración para probar entradas y salidas. Cargar nuevamente los datos de prueba conserva las mensualidades existentes.
 
-Al crear una base de datos nueva y ejecutar datos_prueba.py:
+El servidor está configurado para una demostración local. La base de datos y las cuentas creadas en tu equipo se mantienen fuera del repositorio.
 
-| Placa | Vehículo | Mensualidad |
-|---|---|---|
-| ABC123 | Toyota Corolla blanco | Vigente |
-| ABC12D | Moto Yamaha FZ negra | Vigente |
-| XYZ789 | Renault Duster gris | Vencida |
+## Guion breve para el video de entrega
 
-Los datos son ficticios. Las mensualidades de demostración se
-calculan respecto a la fecha de su primera carga. Ejecutar
-nuevamente datos_prueba.py no renueva las mensualidades existentes.
-
-Operarios disponibles: operario1, operario2 y operario3.
-
-## Prueba desde la interfaz
-
-1. Entrar en Registrar entrada y consultar ABC123.
-2. Verificar sus características y confirmar el ingreso.
-3. Conservar el código del comprobante generado.
-4. Revisar la celda asignada en Ocupación.
-5. Opcionalmente, corregirla a otra celda disponible.
-6. Registrar la salida con ABC123 y su comprobante.
-7. Revisar el historial y la liberación de la celda.
-
-La asignación es aleatoria. Cada nuevo ingreso genera un
-comprobante diferente.
-
-## Archivos principales
-
-- app.py: crea las tablas, las celdas y los operarios de prueba.
-- schema.sql: estructura de la base de datos y restricciones.
-- datos_prueba.py: carga vehículos y mensualidades ficticias.
-- operaciones.py: registro de entradas y salidas.
-- web.py: interfaz web, consultas y correcciones de celda.
-- autos_colombia.db: base de datos local generada al ejecutar app.py.
-
-## Alcance y decisiones de esta versión
-
-La gestión completa de clientes y pagos corresponde a futuras
-iteraciones. Esta entrega consulta datos previamente cargados.
-
-El selector de operario es para demostración; no implementa
-autenticación con contraseña.
-
-Las fechas de mensualidad se guardan como AAAA-MM-DD y las
-fechas de movimientos incluyen hora. En esta versión, la fecha
-de vencimiento se considera incluida.
-
-SQLite utiliza TEXT para almacenar fechas y horas. El SQL
-implementado en schema.sql concreta esta adaptación del modelo.
-
-Las entradas y correcciones usan transacciones de escritura.
-Dos índices únicos parciales impiden estancias abiertas
-duplicadas por vehículo o celda.
-
-La aplicación se ejecuta localmente. No está configurada para
-publicación en Internet.
+1. **Presentación.** “Soy Yuliet Hernández. Presento la segunda iteración del sistema de información Autos Colombia. Esta versión agrega gestión del personal, clientes, vehículos y celdas al flujo de entradas y salidas”.
+2. **Usuarios y vehículos.** Inicia sesión como administradora, muestra la lista de cuentas y registra un cliente ficticio con una placa nueva. “La placa identifica el vehículo y un cliente puede tener varios asociados. Las operaciones se vinculan al usuario de la sesión”.
+3. **Celdas.** Pon E01 fuera de servicio con el motivo Mantenimiento. Muestra que la capacidad operativa pasa de 80 a 79. Habilítala con el motivo Reparación terminada y revisa la bitácora.
+4. **Flujo de EA1.** Consulta ABC123, registra el ingreso, muestra el comprobante y úsalo para registrar la salida. Enseña cómo se libera la celda en Ocupación.
+5. **Cierre.** “Las pruebas verificaron el acceso por rol, el rechazo de placas duplicadas y que las celdas fuera de servicio queden excluidas de la asignación. El prototipo conserva el historial y se ejecuta localmente con Python y SQLite”.

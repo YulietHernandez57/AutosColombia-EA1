@@ -25,12 +25,18 @@ def registrar_entrada(placa, usuario_operario):
             raise ValueError("El operario no está registrado.")
 
         vehiculo = conexion.execute(
-            "SELECT * FROM vehiculo WHERE placa = ?",
+            """
+            SELECT v.*, p.activo AS cliente_activo
+            FROM vehiculo v JOIN persona p USING (id_persona) WHERE v.placa = ?
+            """,
             (placa,)
         ).fetchone()
 
         if vehiculo is None:
             raise ValueError("El vehículo no está registrado.")
+
+        if not vehiculo["activo"] or not vehiculo["cliente_activo"]:
+            raise ValueError("El cliente o el vehículo está inactivo.")
 
         abierta = conexion.execute(
             """
@@ -71,8 +77,8 @@ def registrar_entrada(placa, usuario_operario):
         celda = conexion.execute(
             """
             SELECT c.id_celda, c.codigo
-            FROM celda AS c
-            WHERE c.tipo = ?
+            FROM disponibilidad_celda AS c
+            WHERE c.tipo = ? AND c.habilitada = 1
               AND NOT EXISTS (
                   SELECT 1
                   FROM estancia AS e
@@ -192,3 +198,142 @@ def registrar_salida(placa, comprobante, usuario_operario):
         "celda_liberada": estancia["codigo_celda"],
         "fecha_salida": fecha_salida
     }
+
+
+def cambiar_estado_celda(codigo, habilitada, motivo, usuario):
+    codigo = codigo.strip().upper()
+    motivo = motivo.strip()
+    if not motivo:
+        raise ValueError("Debes indicar el motivo del cambio.")
+
+    with sqlite3.connect(
+        CARPETA / "autos_colombia.db", timeout=15
+    ) as conexion:
+        conexion.row_factory = sqlite3.Row
+        conexion.execute("PRAGMA foreign_keys = ON")
+        conexion.execute("BEGIN IMMEDIATE")
+
+        operario = conexion.execute(
+            "SELECT id_operario FROM operario WHERE usuario = ?", (usuario,)
+        ).fetchone()
+        if operario is None:
+            raise ValueError("El operario no está registrado.")
+
+        celda = conexion.execute(
+            "SELECT * FROM disponibilidad_celda WHERE codigo = ?", (codigo,)
+        ).fetchone()
+        if celda is None:
+            raise ValueError("La celda no existe.")
+        if celda["habilitada"] == habilitada:
+            estado = "habilitada" if habilitada else "fuera de servicio"
+            raise ValueError(f"La celda {codigo} ya está {estado}.")
+
+        ocupada = conexion.execute(
+            '''
+            SELECT 1 FROM estancia
+            WHERE id_celda = ? AND fecha_hora_salida IS NULL
+            ''',
+            (celda["id_celda"],)
+        ).fetchone()
+        if ocupada:
+            raise ValueError("La celda está ocupada. Libérala antes de cambiar su estado.")
+
+        conexion.execute(
+            '''
+            INSERT INTO estado_celda (
+                id_celda, id_operario, habilitada, motivo, fecha_hora
+            ) VALUES (?, ?, ?, ?, ?)
+            ''',
+            (
+                celda["id_celda"], operario["id_operario"], habilitada, motivo,
+                datetime.now().isoformat(timespec="seconds")
+            )
+        )
+
+
+def registrar_cliente_vehiculo(documento, nombre, placa, tipo, marca, modelo, color):
+    documento, nombre, placa, marca, modelo, color = (
+        valor.strip() for valor in (documento, nombre, placa, marca, modelo, color)
+    )
+    placa = placa.upper()
+    if not all((documento, nombre, placa, marca, modelo, color)):
+        raise ValueError("Completa todos los datos del cliente y del vehículo.")
+    if tipo not in ("Moto", "Automovil", "Camioneta"):
+        raise ValueError("Selecciona un tipo de vehículo válido.")
+
+    with sqlite3.connect(CARPETA / "autos_colombia.db", timeout=15) as conexion:
+        conexion.execute("PRAGMA foreign_keys = ON")
+        conexion.execute("BEGIN IMMEDIATE")
+        if conexion.execute("SELECT 1 FROM vehiculo WHERE placa = ?", (placa,)).fetchone():
+            raise ValueError("La placa ya está registrada.")
+        cliente = conexion.execute(
+            "SELECT id_persona, nombre, activo FROM persona WHERE documento = ?", (documento,)
+        ).fetchone()
+        if cliente is None:
+            id_persona = conexion.execute(
+                "INSERT INTO persona (documento, nombre) VALUES (?, ?)", (documento, nombre)
+            ).lastrowid
+        else:
+            id_persona, nombre_registrado, activo = cliente
+            if not activo:
+                raise ValueError("Reactiva al cliente antes de asociar un vehículo.")
+            if nombre_registrado.casefold() != nombre.casefold():
+                raise ValueError("El documento corresponde a un cliente con otro nombre.")
+        conexion.execute(
+            """
+            INSERT INTO vehiculo (placa, tipo, marca, modelo, color, id_persona)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (placa, tipo, marca, modelo, color, id_persona)
+        )
+    return placa
+
+
+def guardar_cliente(documento, nombre, modo):
+    documento = documento.strip()
+    nombre = nombre.strip()
+    if not documento:
+        raise ValueError("Ingresa el documento del cliente.")
+
+    with sqlite3.connect(CARPETA / "autos_colombia.db", timeout=15) as conexion:
+        if modo == "registrar" and nombre:
+            if conexion.execute(
+                "SELECT 1 FROM persona WHERE documento = ?", (documento,)
+            ).fetchone():
+                raise ValueError("El documento ya está registrado.")
+            conexion.execute(
+                "INSERT INTO persona (documento, nombre) VALUES (?, ?)", (documento, nombre)
+            )
+            return
+        if modo == "actualizar" and nombre:
+            resultado = conexion.execute(
+                "UPDATE persona SET nombre = ? WHERE documento = ?", (nombre, documento)
+            )
+        elif modo in ("activar", "desactivar"):
+            resultado = conexion.execute(
+                "UPDATE persona SET activo = ? WHERE documento = ?",
+                (modo == "activar", documento)
+            )
+        else:
+            raise ValueError("Completa el nombre o selecciona un cambio de estado.")
+        if resultado.rowcount == 0:
+            raise ValueError("El cliente no existe.")
+
+
+def actualizar_vehiculo(placa, marca, modelo, color, modo):
+    placa = placa.strip().upper()
+    marca, modelo, color = (valor.strip() for valor in (marca, modelo, color))
+    with sqlite3.connect(CARPETA / "autos_colombia.db", timeout=15) as conexion:
+        if modo in ("activar", "desactivar"):
+            resultado = conexion.execute(
+                "UPDATE vehiculo SET activo = ? WHERE placa = ?", (modo == "activar", placa)
+            )
+        elif modo == "actualizar" and all((marca, modelo, color)):
+            resultado = conexion.execute(
+                "UPDATE vehiculo SET marca = ?, modelo = ?, color = ? WHERE placa = ?",
+                (marca, modelo, color, placa)
+            )
+        else:
+            raise ValueError("Completa marca, modelo y color o selecciona un cambio de estado.")
+        if resultado.rowcount == 0:
+            raise ValueError("El vehículo no existe.")

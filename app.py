@@ -9,6 +9,15 @@ with sqlite3.connect(CARPETA / "autos_colombia.db") as conexion:
     esquema = (CARPETA / "schema.sql").read_text(encoding="utf-8")
     conexion.executescript(esquema)
 
+    conexion.execute("BEGIN IMMEDIATE")
+    for tabla in ("persona", "vehiculo"):
+        columnas = conexion.execute(f"PRAGMA table_info({tabla})").fetchall()
+        if all(columna[1] != "activo" for columna in columnas):
+            conexion.execute(
+                f"ALTER TABLE {tabla} ADD COLUMN activo INTEGER NOT NULL DEFAULT 1 "
+                "CHECK (activo IN (0, 1))"
+            )
+
     for numero in range(1, 11):
         conexion.execute(
             "INSERT OR IGNORE INTO celda (codigo, tipo) VALUES (?, ?)",

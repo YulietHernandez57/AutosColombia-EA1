@@ -3,7 +3,8 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS persona (
     id_persona INTEGER PRIMARY KEY,
     documento TEXT NOT NULL UNIQUE,
-    nombre TEXT NOT NULL
+    nombre TEXT NOT NULL,
+    activo INTEGER NOT NULL DEFAULT 1 CHECK (activo IN (0, 1))
 );
 
 CREATE TABLE IF NOT EXISTS vehiculo (
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS vehiculo (
     marca TEXT NOT NULL,
     modelo TEXT NOT NULL,
     color TEXT NOT NULL,
+    activo INTEGER NOT NULL DEFAULT 1 CHECK (activo IN (0, 1)),
     id_persona INTEGER NOT NULL,
     FOREIGN KEY (id_persona) REFERENCES persona(id_persona)
 );
@@ -89,3 +91,34 @@ WHERE fecha_hora_salida IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS celda_estancia_abierta
 ON estancia(id_celda)
 WHERE fecha_hora_salida IS NULL;
+
+CREATE TABLE IF NOT EXISTS estado_celda (
+    id_estado_celda INTEGER PRIMARY KEY,
+    id_celda INTEGER NOT NULL REFERENCES celda(id_celda),
+    id_operario INTEGER NOT NULL REFERENCES operario(id_operario),
+    habilitada INTEGER NOT NULL CHECK (habilitada IN (0, 1)),
+    motivo TEXT NOT NULL CHECK (length(trim(motivo)) > 0),
+    fecha_hora TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS estado_celda_por_celda
+ON estado_celda(id_celda, id_estado_celda DESC);
+
+CREATE VIEW IF NOT EXISTS disponibilidad_celda AS
+SELECT c.id_celda, c.codigo, c.tipo,
+       COALESCE((
+           SELECT ec.habilitada
+           FROM estado_celda AS ec
+           WHERE ec.id_celda = c.id_celda
+           ORDER BY ec.id_estado_celda DESC
+           LIMIT 1
+       ), 1) AS habilitada
+FROM celda AS c;
+
+CREATE TABLE IF NOT EXISTS cuenta (
+    id_operario INTEGER PRIMARY KEY REFERENCES operario(id_operario),
+    rol TEXT NOT NULL CHECK (rol IN ('Administrador', 'Operario')),
+    sal BLOB NOT NULL,
+    clave BLOB NOT NULL,
+    activa INTEGER NOT NULL DEFAULT 1 CHECK (activa IN (0, 1))
+);

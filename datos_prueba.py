@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 from datetime import date, timedelta
+from pagos import fin_de_mes_pagado
 
 CARPETA = Path(__file__).resolve().parent
 hoy = date.today()
@@ -20,6 +21,22 @@ with sqlite3.connect(CARPETA / "autos_colombia.db") as conexion:
         "SELECT id_persona FROM persona WHERE documento = ?",
         ("DEMO001",)
     ).fetchone()[0]
+
+    conexion.execute(
+        "INSERT OR IGNORE INTO persona (documento, nombre) VALUES (?, ?)",
+        ("DEMOEA2", "Cliente de prueba EA2")
+    )
+    cliente_ea2 = conexion.execute(
+        "SELECT id_persona FROM persona WHERE documento = ?", ("DEMOEA2",)
+    ).fetchone()[0]
+    conexion.execute(
+        """
+        INSERT OR IGNORE INTO vehiculo
+        (placa, tipo, marca, modelo, color, id_persona)
+        VALUES ('NEW123', 'Automovil', 'Renault', 'Logan', 'Gris', ?)
+        """,
+        (cliente_ea2,)
+    )
 
     vehiculos = [
         ("ABC123", "Automovil", "Toyota", "Corolla", "Blanco"),
@@ -54,7 +71,7 @@ with sqlite3.connect(CARPETA / "autos_colombia.db") as conexion:
                 vencimiento = hoy - timedelta(days=10)
             else:
                 inicio = hoy
-                vencimiento = hoy + timedelta(days=30)
+                vencimiento = fin_de_mes_pagado(hoy)
 
             conexion.execute(
                 """
@@ -68,3 +85,4 @@ with sqlite3.connect(CARPETA / "autos_colombia.db") as conexion:
 print("Datos de prueba guardados.")
 print("ABC123 y ABC12D: mensualidad vigente.")
 print("XYZ789: mensualidad vencida.")
+print("NEW123: vehículo de demostración para registrar su primer pago.")

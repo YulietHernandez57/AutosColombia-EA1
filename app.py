@@ -42,6 +42,20 @@ with sqlite3.connect(CARPETA / "autos_colombia.db") as conexion:
         ]
     )
 
+    # Tarifas ficticias iniciales. La administración puede cambiarlas desde la web.
+    for tipo, valor in (("Moto", 8000000), ("Vehiculo", 20000000)):
+        existe = conexion.execute(
+            "SELECT 1 FROM tarifa_mensual WHERE tipo_celda = ?", (tipo,)
+        ).fetchone()
+        if not existe:
+            conexion.execute(
+                """
+                INSERT INTO tarifa_mensual (tipo_celda, valor_centavos, fecha_hora)
+                VALUES (?, ?, datetime('now', 'localtime'))
+                """,
+                (tipo, valor)
+            )
+
     total = conexion.execute(
         "SELECT COUNT(*) FROM celda"
     ).fetchone()[0]

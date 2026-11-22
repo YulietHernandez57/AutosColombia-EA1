@@ -9,7 +9,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from cuentas import autenticar, buscar_cuenta, cambiar_acceso_operario, crear_cuenta
+from cuentas import (
+    autenticar, buscar_cuenta, cambiar_acceso_operario, crear_cuenta,
+    actualizar_cuenta_operario,
+)
+import pagos
+import vistas_pagos
 from operaciones import (
     actualizar_vehiculo, cambiar_estado_celda, guardar_cliente,
     registrar_cliente_vehiculo, registrar_entrada, registrar_salida,
@@ -178,7 +183,7 @@ def formulario_ingreso():
     )
 
 
-def contenido_pagina(ruta):
+def contenido_pagina(ruta, busqueda=""):
     if ruta == "/clientes":
         with conectar() as conexion:
             clientes = conexion.execute(
@@ -187,8 +192,10 @@ def contenido_pagina(ruta):
                        v.placa, v.marca, v.modelo, v.color,
                        CASE v.activo WHEN 1 THEN 'Activo' WHEN 0 THEN 'Inactivo' END
                 FROM persona p LEFT JOIN vehiculo v USING (id_persona)
+                WHERE instr(lower(p.nombre), lower(?)) > 0 OR instr(p.documento, ?) > 0
                 ORDER BY p.nombre, v.placa
-                """
+                """,
+                (busqueda.strip(), busqueda.strip())
             ).fetchall()
         estado = (
             '<option value="actualizar">Actualizar datos</option>'
@@ -223,6 +230,10 @@ def contenido_pagina(ruta):
                 "Aplicar al vehículo"
             )
             + "<h2>Clientes y vehículos registrados</h2>"
+            + '<form class="busqueda" method="get" action="/clientes">'
+              '<label>Buscar por nombre o documento'
+            + f'<input name="buscar" value="{escapar(busqueda)}" maxlength="250"></label>'
+              '<button>Buscar</button> <a href="/clientes">Ver todos</a></form>'
             + tabla(
                 ["Documento", "Cliente", "Estado cliente", "Placa", "Marca", "Modelo",
                  "Color", "Estado vehículo"], clientes
@@ -247,6 +258,14 @@ def contenido_pagina(ruta):
                 "Crear operario"
             )
             + tabla(["Usuario", "Nombre", "Estado"], filas)
+            + "<h2>Actualizar cuenta de operario</h2>"
+            + formulario(
+                "editar-operario", campo("usuario", "Usuario existente")
+                + campo("nombre", "Nombre")
+                + '<label>Nueva contraseña (opcional)'
+                  '<input type="password" name="clave" minlength="8" maxlength="250"></label>',
+                "Guardar cuenta"
+            )
             + formulario(
                 "acceso-operario", campo("usuario", "Usuario")
                 + '<label>Acceso<select name="activa"><option value="0">Desactivar</option>'
@@ -434,7 +453,7 @@ def consultar_vehiculo(placa):
     with conectar() as conexion:
         vehiculo = conexion.execute(
             """
-            SELECT v.*, p.nombre AS persona
+            SELECT v.*, p.nombre AS persona, p.activo AS cliente_activo
             FROM vehiculo v
             JOIN persona p ON p.id_persona = v.id_persona
             WHERE v.placa = ?
@@ -445,6 +464,20 @@ def consultar_vehiculo(placa):
     if not vehiculo:
         raise ValueError("El vehículo no está registrado.")
 
+    with conectar() as conexion:
+        cobertura = conexion.execute(
+            """
+            SELECT fecha_vencimiento FROM mensualidad
+            WHERE id_vehiculo = ? AND fecha_inicio <= ? AND fecha_vencimiento >= ?
+            ORDER BY fecha_vencimiento DESC LIMIT 1
+            """,
+            (vehiculo["id_vehiculo"], pagos.hoy_local().isoformat(),
+             pagos.hoy_local().isoformat())
+        ).fetchone()
+    vigencia = (
+        "Vigente hasta " + vistas_pagos.fecha(cobertura["fecha_vencimiento"])
+        if cobertura else "Sin cobertura vigente"
+    )
     datos = tabla(
         ["Placa", "Tipo", "Marca", "Modelo", "Color", "Persona"],
         [[
@@ -455,6 +488,7 @@ def consultar_vehiculo(placa):
     return (
         "<h1>Verificar vehículo</h1>"
         + datos
+        + f"<p>Mensualidad: {escapar(vigencia)}</p>"
         + "<p>Confirma que los datos coincidan con el vehículo presente. "
         "Al confirmar se validará la mensualidad y la disponibilidad.</p>"
         + formulario(
@@ -465,8 +499,8 @@ def consultar_vehiculo(placa):
     )
 
 
-def pagina(contenido, cuenta=None):
-    return """<!DOCTYPE html>
+def pagina(contenido, cuenta=None, ruta="/"):
+    documento = """<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -530,6 +564,65 @@ button, .boton {
     aside { position: static; width: 100%; height: auto; }
     main { margin-left: 0; padding: 18px; }
 }
+
+:root { --azul: #2563eb; --marino: #102440; --borde: #dce5f1; }
+body { background: #f3f5f9; color: #18334f; }
+aside { background: var(--marino); padding: 24px 16px; overflow-y: auto; }
+aside h2 { display: flex; align-items: center; margin: 4px 0 24px; font-size: 20px; }
+aside h2::before {
+    content: "P"; display: inline-block; flex-shrink: 0; padding: 9px 13px;
+    margin-right: 9px; border-radius: 12px; background: var(--azul);
+}
+aside a { font-size: 14px; padding: 12px 10px; margin: 3px 0; }
+aside a:hover, aside a.activa { background: var(--azul); }
+aside form { background: transparent; padding: 0; margin: 20px 0 0; }
+aside form button { border: 1px solid #425873; background: transparent; }
+main { max-width: 1900px; padding: 32px 36px; }
+h1 { color: #102440; font-size: 30px; margin: 0 0 24px; }
+h2 { font-size: 20px; margin-top: 0; }
+button, .boton { background: var(--azul); font-weight: 600; box-shadow: 0 2px 5px #2563eb18; }
+button:hover, .boton:hover { background: #1d4ed8; }
+.secundaria { background: white; color: #18334f; border: 1px solid var(--borde); }
+.panel, form, .tarjeta, .tabla {
+    border: 1px solid var(--borde); border-radius: 12px;
+    box-shadow: 0 3px 12px #16345105; background: white;
+}
+.panel { padding: 28px; margin-top: 22px; }
+.panel header { display: flex; justify-content: space-between; gap: 24px; align-items: center; }
+input, select { border-color: #cfdbee; color: #18334f; background: white; }
+input:focus, select:focus { outline: 2px solid #90b4ff; outline-offset: 2px; }
+input[type=hidden] { display: none; }
+[hidden] { display: none !important; }
+.datos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 24px 0; }
+.dato dt { font-size: 14px; color: #667f9d; margin-bottom: 8px; }
+.dato dd { margin: 0; overflow-wrap: anywhere; line-height: 1.5; }
+.columnas { display: grid; grid-template-columns: 1fr 1.2fr; gap: 24px; align-items: start; }
+.columnas form { max-width: none; }
+.pestanas { display: flex; gap: 10px; margin: 0 0 20px; }
+.pestanas a { color: #345171; padding: 11px 16px; text-decoration: none; border-radius: 8px; }
+.pestanas .seleccionada { background: #e6edff; color: #1c51d4; font-weight: bold; }
+.importe { background: #f2f6ff; color: var(--azul); font-size: 28px; font-weight: bold; padding: 22px; border-radius: 9px; }
+.codigo { color: var(--azul); font-size: 23px; font-weight: bold; }
+.exito { background: #edf9f4; color: #08765b; padding: 18px 22px; border: 1px solid #c5e8db; border-radius: 10px; }
+.ayuda { font-size: 14px; line-height: 1.5; color: #657b94; }
+.busqueda, .filtros { max-width: none; }
+.filtros { display: flex; align-items: end; flex-wrap: wrap; gap: 18px; }
+.filtros label { flex: 1; margin: 0; min-width: 150px; }
+.acciones { display: flex; flex-wrap: wrap; gap: 12px; }
+th { background: #f2f6fb; font-size: 13px; }
+td { font-size: 14px; }
+@media (max-width: 1000px) { .columnas { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { main { padding: 20px; } .datos { grid-template-columns: 1fr; } }
+@media print {
+    @page { size: A4; margin: 15mm; }
+    body, main { background: white; color: black; }
+    aside, .pestanas, .acciones, .exito, main > h1, main > p, form { display: none !important; }
+    main { margin: 0; max-width: none; padding: 0; }
+    .comprobante { margin: 0; box-shadow: none; break-inside: avoid; }
+    .comprobante h2 { display: block; }
+    .datos { grid-template-columns: 1fr 1fr; }
+}
+
 </style>
 </head>
 <body>
@@ -540,12 +633,19 @@ button, .boton {
         '<a href="/">Ocupación</a><a href="/entrada">Registrar entrada</a>'
         '<a href="/salida">Registrar salida</a><a href="/corregir">Corregir celda</a>'
         '<a href="/historial">Historial</a><a href="/clientes">Clientes y vehículos</a>'
+        '<a href="/pagos">Pagos y mensualidades</a>'
         + ('<a href="/celdas">Gestionar celdas</a><a href="/cuentas">Cuentas de operarios</a>'
+           '<a href="/tarifas">Administrar tarifas</a>'
            if cuenta["rol"] == "Administrador" else "")
         + formulario("logout", "", "Cerrar sesión")
     ) if cuenta else ""
 ) + """</aside>
 <main>""" + contenido + "</main></body></html>"
+    destino = "/pagos" if ruta.startswith("/pagos") else ruta
+    return documento.replace(
+        f'<a href="{destino}">', f'<a class="activa" href="{destino}">'
+    )
+
 
 
 class Servidor(BaseHTTPRequestHandler):
@@ -579,7 +679,7 @@ class Servidor(BaseHTTPRequestHandler):
         self.end_headers()
 
     def responder(self, contenido, estado=200):
-        datos = pagina(contenido, self.cuenta).encode("utf-8")
+        datos = pagina(contenido, self.cuenta, urlparse(self.path).path).encode("utf-8")
         self.send_response(estado)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(datos)))
@@ -600,17 +700,36 @@ class Servidor(BaseHTTPRequestHandler):
             if not self.cargar_cuenta():
                 self.redirigir("/login")
                 return
-            if url.path in ("/celdas", "/cuentas") and self.cuenta["rol"] != "Administrador":
+            if url.path in ("/celdas", "/cuentas", "/tarifas") and self.cuenta["rol"] != "Administrador":
                 self.responder("<h1>Acceso restringido</h1>", 403)
                 return
-            if url.path == "/consultar":
+            parametros = parse_qs(url.query)
+            if url.path == "/pagos":
+                contenido = vistas_pagos.pagina_pagos(
+                    parametros.get("placa", [""])[0], TOKEN
+                )
+            elif url.path == "/pagos/historial":
+                contenido = vistas_pagos.pagina_historial(
+                    parametros.get("placa", [""])[0],
+                    parametros.get("desde", [""])[0],
+                    parametros.get("hasta", [""])[0]
+                )
+            elif url.path == "/pagos/comprobante":
+                contenido = vistas_pagos.comprobante_pago(
+                    parametros.get("codigo", [""])[0]
+                )
+            elif url.path == "/tarifas":
+                contenido = vistas_pagos.pagina_tarifas(
+                    TOKEN, parametros.get("guardado") == ["1"]
+                )
+            elif url.path == "/consultar":
                 parametros = parse_qs(url.query)
                 placa = parametros.get("placa", [""])[0]
                 contenido = consultar_vehiculo(placa)
             elif url.path in [
                 "/", "/entrada", "/salida", "/corregir", "/historial", "/celdas", "/clientes", "/cuentas"
             ]:
-                contenido = contenido_pagina(url.path)
+                contenido = contenido_pagina(url.path, parametros.get("buscar", [""])[0])
             else:
                 self.responder("<h1>Página no encontrada</h1>", 404)
                 return
@@ -668,12 +787,28 @@ class Servidor(BaseHTTPRequestHandler):
                 self.redirigir("/login", "autos_sesion=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
                 return
 
-            if ruta in ("/cuentas", "/acceso-operario", "/habilitar-celda", "/deshabilitar-celda"):
+            if ruta in ("/cuentas", "/acceso-operario", "/habilitar-celda", "/deshabilitar-celda", "/tarifas", "/editar-operario"):
                 if self.cuenta["rol"] != "Administrador":
                     self.responder("<h1>Acceso restringido</h1>", 403)
                     return
 
-            if ruta == "/clientes":
+            if ruta == "/pagos/revisar":
+                codigo, resumen = pagos.preparar_pago(
+                    valor("placa"), valor("medio"), valor("referencia"), self.cuenta["usuario"]
+                )
+                self.responder(vistas_pagos.resumen_pago(codigo, resumen, TOKEN))
+                return
+            elif ruta == "/pagos/confirmar":
+                codigo = pagos.confirmar_pago(valor("solicitud"), self.cuenta["usuario"])
+                self.redirigir("/pagos/comprobante?codigo=" + codigo)
+                return
+            elif ruta == "/tarifas":
+                pagos.actualizar_tarifas(
+                    valor("motos"), valor("vehiculos"), self.cuenta["usuario"]
+                )
+                self.redirigir("/tarifas?guardado=1")
+                return
+            elif ruta == "/clientes":
                 placa = registrar_cliente_vehiculo(
                     valor("documento"), valor("nombre"), valor("placa"), valor("tipo"),
                     valor("marca"), valor("modelo"), valor("color")
@@ -691,6 +826,15 @@ class Servidor(BaseHTTPRequestHandler):
                 return
             elif ruta == "/cuentas":
                 crear_cuenta(valor("usuario"), valor("nombre"), valor("clave"))
+                self.redirigir("/cuentas")
+                return
+            elif ruta == "/editar-operario":
+                usuario = valor("usuario").strip().lower()
+                actualizar_cuenta_operario(usuario, valor("nombre"), valor("clave"))
+                with BLOQUEO_SESIONES:
+                    for id_sesion, (titular, _) in list(SESIONES.items()):
+                        if titular == usuario:
+                            del SESIONES[id_sesion]
                 self.redirigir("/cuentas")
                 return
             elif ruta == "/acceso-operario":

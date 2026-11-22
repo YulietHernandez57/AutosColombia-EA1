@@ -122,3 +122,47 @@ CREATE TABLE IF NOT EXISTS cuenta (
     clave BLOB NOT NULL,
     activa INTEGER NOT NULL DEFAULT 1 CHECK (activa IN (0, 1))
 );
+
+CREATE TABLE IF NOT EXISTS tarifa_mensual (
+    id_tarifa INTEGER PRIMARY KEY,
+    tipo_celda TEXT NOT NULL CHECK (tipo_celda IN ('Moto', 'Vehiculo')),
+    valor_centavos INTEGER NOT NULL CHECK (valor_centavos > 0),
+    fecha_hora TEXT NOT NULL,
+    id_operario INTEGER REFERENCES operario(id_operario)
+);
+
+CREATE INDEX IF NOT EXISTS tarifa_por_tipo
+ON tarifa_mensual(tipo_celda, id_tarifa DESC);
+
+CREATE TABLE IF NOT EXISTS solicitud_pago (
+    codigo TEXT PRIMARY KEY,
+    id_operario INTEGER NOT NULL REFERENCES operario(id_operario),
+    fecha_hora TEXT NOT NULL,
+    datos TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pago (
+    id_pago INTEGER PRIMARY KEY,
+    codigo_comprobante TEXT NOT NULL UNIQUE,
+    solicitud TEXT NOT NULL UNIQUE REFERENCES solicitud_pago(codigo),
+    id_mensualidad INTEGER NOT NULL UNIQUE REFERENCES mensualidad(id_mensualidad),
+    id_vehiculo INTEGER NOT NULL REFERENCES vehiculo(id_vehiculo),
+    id_operario INTEGER NOT NULL REFERENCES operario(id_operario),
+    id_tarifa INTEGER NOT NULL REFERENCES tarifa_mensual(id_tarifa),
+    valor_centavos INTEGER NOT NULL CHECK (valor_centavos > 0),
+    medio TEXT NOT NULL CHECK (medio IN ('Efectivo', 'Transferencia')),
+    referencia TEXT NOT NULL,
+    fecha_hora TEXT NOT NULL,
+    fecha_inicio TEXT NOT NULL,
+    ultimo_dia TEXT NOT NULL CHECK (ultimo_dia >= fecha_inicio),
+    placa TEXT NOT NULL,
+    cliente TEXT NOT NULL,
+    documento TEXT NOT NULL,
+    tipo_vehiculo TEXT NOT NULL,
+    nombre_operario TEXT NOT NULL,
+    usuario_operario TEXT NOT NULL,
+    CHECK (medio <> 'Transferencia' OR length(trim(referencia)) > 0)
+);
+
+CREATE INDEX IF NOT EXISTS pago_por_fecha ON pago(fecha_hora);
+CREATE INDEX IF NOT EXISTS pago_por_placa ON pago(placa, fecha_hora);

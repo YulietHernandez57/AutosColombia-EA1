@@ -1,0 +1,49 @@
+{
+  "fecha_ejecucion": "2026-11-22T16:07:21",
+  "tipo": "Automáticas: funciones de negocio del servidor, no navegador ni HTTP.",
+  "entorno": "Base temporal nueva, datos ficticios. Base del usuario no utilizada.",
+  "resultados": [
+    {
+      "caso": "PG-17",
+      "prueba": "Transferencia válida",
+      "estado": "Aprobado",
+      "resultado": "Transferencia guardada con referencia y comprobante en base temporal."
+    },
+    {
+      "caso": "PG-18",
+      "prueba": "Renovación anticipada",
+      "estado": "Aprobado",
+      "resultado": "Renovación confirmada desde el día siguiente al último cubierto, sin superposición."
+    },
+    {
+      "caso": "PG-19",
+      "prueba": "Confirmación sin duplicado",
+      "estado": "Aprobado",
+      "resultado": "Reenviar la misma confirmación devuelve el comprobante existente sin otro pago."
+    },
+    {
+      "caso": "PG-20",
+      "prueba": "Conservación del valor histórico",
+      "estado": "Aprobado",
+      "resultado": "Comprobante anterior conserva 200000 COP; una nueva cotización usa 250000 COP."
+    },
+    {
+      "caso": "PG-21",
+      "prueba": "Registro por operario",
+      "estado": "Aprobado",
+      "resultado": "Pago registrado por operario_test; modificación de tarifas denegada al operario."
+    },
+    {
+      "caso": "PG-22",
+      "prueba": "Filtro por fechas",
+      "estado": "Aprobado",
+      "resultado": "Filtro inclusivo encuentra el pago en su fecha y lo excluye de un intervalo sin pagos."
+    },
+    {
+      "caso": "PG-23",
+      "prueba": "Validaciones en funciones del servidor",
+      "estado": "Aprobado",
+      "resultado": "Funciones del servidor rechazan tarifa cero y transferencia sin referencia; conteos sin cambios."
+    }
+  ]
+}

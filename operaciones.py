@@ -169,7 +169,7 @@ def registrar_salida(placa, comprobante, usuario_operario):
             )
 
         if not secrets.compare_digest(
-            estancia["codigo_comprobante"], comprobante
+            estancia["codigo_comprobante"].encode("utf-8"), comprobante.encode("utf-8")
         ):
             raise ValueError(
                 "El comprobante no corresponde al vehículo."
@@ -324,6 +324,17 @@ def actualizar_vehiculo(placa, marca, modelo, color, modo):
     placa = placa.strip().upper()
     marca, modelo, color = (valor.strip() for valor in (marca, modelo, color))
     with sqlite3.connect(CARPETA / "autos_colombia.db", timeout=15) as conexion:
+        conexion.execute("BEGIN IMMEDIATE")
+        if modo == "desactivar":
+            estancia = conexion.execute(
+                """
+                SELECT 1 FROM estancia e JOIN vehiculo v USING (id_vehiculo)
+                WHERE v.placa = ? AND e.fecha_hora_salida IS NULL
+                """,
+                (placa,)
+            ).fetchone()
+            if estancia:
+                raise ValueError("El vehículo está dentro. Registra la salida antes de desactivarlo.")
         if modo in ("activar", "desactivar"):
             resultado = conexion.execute(
                 "UPDATE vehiculo SET activo = ? WHERE placa = ?", (modo == "activar", placa)

@@ -98,3 +98,33 @@ if __name__ == "__main__":
         print("Cuenta de administrador creada.")
     except (ValueError, sqlite3.Error) as error:
         raise SystemExit(str(error))
+
+
+def actualizar_cuenta_operario(usuario, nombre, clave=""):
+    usuario = usuario.strip().lower()
+    nombre = nombre.strip()
+    if not nombre:
+        raise ValueError("Ingresa el nombre del operario.")
+    if clave and len(clave) < 8:
+        raise ValueError("La nueva contraseña debe tener al menos ocho caracteres.")
+    with closing(conectar()) as conexion, conexion:
+        conexion.execute("BEGIN IMMEDIATE")
+        cuenta = conexion.execute(
+            """
+            SELECT o.id_operario FROM operario o JOIN cuenta c USING (id_operario)
+            WHERE o.usuario = ? AND c.rol = 'Operario'
+            """,
+            (usuario,)
+        ).fetchone()
+        if cuenta is None:
+            raise ValueError("La cuenta de operario indicada no existe.")
+        conexion.execute(
+            "UPDATE operario SET nombre = ? WHERE id_operario = ?",
+            (nombre, cuenta["id_operario"])
+        )
+        if clave:
+            sal = secrets.token_bytes(16)
+            conexion.execute(
+                "UPDATE cuenta SET sal = ?, clave = ? WHERE id_operario = ?",
+                (sal, derivar_clave(clave, sal), cuenta["id_operario"])
+            )
